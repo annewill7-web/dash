@@ -1,375 +1,155 @@
-let rows = [];
-let chartInstances = {};
+const $ = (s) => document.querySelector(s);
+const state = { type:'report', attachments:[], doc:null };
+const TYPE_GUIDES = {
+  report: '요약을 먼저 제시하고 1. 추진배경, 2. 주요내용, 3. 향후계획을 기본 골격으로 한다. 필요하면 가. 나. 소제목을 사용할 수 있다.',
+  education: '교육/행사 계획형으로 작성한다. □ 추진 배경, □ 교육 개요, □ 세부 계획, □ 행정사항 순서를 우선한다. 일시·방법·대상·내용은 ○ 항목으로 명확하게 쓴다.',
+  brief: '1~2페이지 분량의 간결 보고형으로 작성한다. 요약, 핵심 현황, 조치사항, 향후계획 중심으로 군더더기를 줄인다.'
+};
+const STYLE = { title:['21','12'], summary:['24','17'], hnum:['24','17'], box:['25','16'], bullet:['25','16'], dash:['27','16'], dot:['27','16'], body:['24','17'] };
+const MARK = { box:'□ ', bullet:'○ ', dash:'- ', dot:'· ' };
 
-const $ = (id) => document.getElementById(id);
+$('#core').addEventListener('input', e => $('#counter').textContent = `${e.target.value.length} / 6000`);
+document.querySelectorAll('.type-card').forEach(btn=>btn.addEventListener('click',()=>{document.querySelectorAll('.type-card').forEach(x=>x.classList.remove('active'));btn.classList.add('active');state.type=btn.dataset.type;}));
 
-function cleanNumber(v){
-  if(v === null || v === undefined) return 0;
-  const n = Number(String(v).replace(/,/g,'').replace(/[^\d.-]/g,''));
-  return Number.isFinite(n) ? n : 0;
+function syncApiUi(){
+  const key=sessionStorage.getItem('gemini_api_key')||'';
+  const inline=$('#apiKeyInline');
+  const status=$('#apiStatus');
+  if(inline && !inline.value) inline.value=key;
+  if(status){ status.textContent=key?'설정 완료':'미설정'; status.classList.toggle('ok',!!key); }
 }
+$('#saveApiInline').onclick=()=>{
+  const v=$('#apiKeyInline').value.trim();
+  if(!v){ alert('Gemini API 키를 입력해 주세요.'); return; }
+  sessionStorage.setItem('gemini_api_key',v); syncApiUi(); alert('API 키를 현재 브라우저 세션에 저장했습니다.');
+};
+$('#toggleApiKey').onclick=()=>{
+  const input=$('#apiKeyInline'); const show=input.type==='password'; input.type=show?'text':'password'; $('#toggleApiKey').textContent=show?'키 숨기기':'키 보기';
+};
+$('#clearApiKey').onclick=()=>{ sessionStorage.removeItem('gemini_api_key'); $('#apiKeyInline').value=''; syncApiUi(); };
+syncApiUi();
 
-function parseSimpleFee(v){
-  if(v === null || v === undefined) return null;
-  const s = String(v).trim();
-  if(!s) return null;
-  const normalized = s.replace(/\s+/g, "");
-  if(!/^[0-9,]+(?:\.[0-9]+)?원?$/.test(normalized)) return null;
-  const n = Number(normalized.replace(/원$/,'').replace(/,/g,''));
-  return Number.isFinite(n) ? n : null;
-}
+$('#apiButton').onclick=()=>{ $('#apiKey').value=sessionStorage.getItem('gemini_api_key')||''; $('#apiDialog').showModal(); };
+$('#saveApi').onclick=()=>{ const v=$('#apiKey').value.trim(); if(v){ sessionStorage.setItem('gemini_api_key',v); if($('#apiKeyInline')) $('#apiKeyInline').value=v; syncApiUi(); } };
 
-function normalizeBoolPaid(row){
-  const raw = String(
-    row["유료사용여부"] ??
-    row["유료여부"] ??
-    row["유료사용"] ??
-    ""
-  ).trim().toUpperCase();
+const dz=$('#dropzone');
+['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('drag')}));
+['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('drag')}));
+dz.addEventListener('drop',e=>handleFiles([...e.dataTransfer.files]));
+$('#files').addEventListener('change',e=>handleFiles([...e.target.files]));
 
-  const feeRaw = row["사용료"] ?? row["기본사용료"] ?? row["이용료"] ?? "";
-  const fee = parseSimpleFee(feeRaw);
-
-  if(["Y","YES","유료","1","TRUE","O"].includes(raw)) return true;
-  if(["N","NO","무료","0","FALSE","X"].includes(raw)) return false;
-
-  return fee !== null ? fee > 0 : /[1-9]/.test(String(feeRaw));
-}
-
-function parseHour(v){
-  if(!v) return null;
-  const s = String(v).trim();
-  const m = s.match(/(\d{1,2})\s*[:시]\s*(\d{1,2})?/);
-  if(!m) return null;
-  const h = Number(m[1]);
-  const min = Number(m[2] || 0);
-  return h + min / 60;
-}
-
-function operatingHours(row, prefix){
-  const start = parseHour(row[`${prefix}운영시작시각`]);
-  const end = parseHour(row[`${prefix}운영종료시각`]);
-  if(start === null || end === null) return null;
-  return end >= start ? end - start : (24 - start + end);
-}
-
-function facilityName(r){
-  return r["개방시설명"] || r["개방장소명"] || "시설명 없음";
-}
-
-function formatNum(n, digits=0){
-  return Number(n || 0).toLocaleString("ko-KR", {
-    maximumFractionDigits: digits,
-    minimumFractionDigits: digits
-  });
-}
-
-function destroyChart(name){
-  if(chartInstances[name]) chartInstances[name].destroy();
-}
-
-function getTopCount(field, limit=10){
-  const map = {};
-  rows.forEach(r=>{
-    const key = String(r[field] ?? "").trim() || "미분류";
-    map[key]=(map[key]||0)+1;
-  });
-  return Object.entries(map).sort((a,b)=>b[1]-a[1]).slice(0,limit);
-}
-
-function renderKpis(){
-  const total = rows.length;
-  const paid = rows.filter(normalizeBoolPaid).length;
-  const free = total - paid;
-  const fees = rows.map(r=>parseSimpleFee(r["사용료"])).filter(v=>v !== null && v>0);
-  const capacities = rows.map(r=>cleanNumber(r["수용가능인원수"])).filter(v=>v>0);
-  const areas = rows.map(r=>cleanNumber(r["면적"])).filter(v=>v>0);
-
-  const avg = arr => arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length : 0;
-
-  $("kpiTotal").textContent = formatNum(total);
-  $("kpiPaid").textContent = formatNum(paid);
-  $("kpiFree").textContent = formatNum(free);
-  $("kpiFee").textContent = formatNum(avg(fees));
-  $("kpiCapacity").textContent = formatNum(avg(capacities),1);
-  $("kpiArea").textContent = formatNum(avg(areas),1);
-
-  const typeTop = getTopCount("개방시설유형구분", 1)[0];
-  const weekendCount = rows.filter(r => operatingHours(r,"주말") > 0).length;
-  const paidRate = total ? paid/total*100 : 0;
-
-  let text = `전체 ${formatNum(total)}개 시설 중 유료 시설은 ${formatNum(paid)}개(${paidRate.toFixed(1)}%), 무료 시설은 ${formatNum(free)}개입니다.`;
-  if(typeTop) text += ` 가장 많이 등록된 시설유형은 '${typeTop[0]}'으로 ${typeTop[1]}개입니다.`;
-  if(capacities.length) text += ` 평균 수용가능인원은 ${formatNum(avg(capacities),1)}명이며, 시설 규모를 비교할 때는 평균값뿐 아니라 상·하위 시설의 편차도 함께 보는 것이 좋습니다.`;
-  if(fees.length) text += ` 단일 금액으로 명확하게 입력된 유료 시설의 평균 기본사용료는 약 ${formatNum(avg(fees))}원입니다. 복합요금표는 평균에서 제외했습니다.`;
-  if(weekendCount) text += ` 주말 운영시간이 확인되는 시설은 ${formatNum(weekendCount)}개입니다.`;
-  text += `\n\n해석 포인트: 시설 수 자체보다 '유형별 공급', '수용인원', '시간당 비용', '주말 이용 가능성'을 함께 보면 실제 이용 관점에서 더 의미 있는 판단이 가능합니다.`;
-
-  $("overviewInsight").textContent = text;
-}
-
-function renderTypeCharts(){
-  const typeData = getTopCount("개방시설유형구분", 12);
-  destroyChart("type");
-  chartInstances.type = new Chart($("typeChart"),{
-    type:"bar",
-    data:{
-      labels:typeData.map(x=>x[0]),
-      datasets:[{label:"시설 수",data:typeData.map(x=>x[1])}]
-    },
-    options:{
-      responsive:true,
-      plugins:{legend:{display:false}},
-      scales:{y:{beginAtZero:true,ticks:{precision:0}}}
-    }
-  });
-
-  const paid = rows.filter(normalizeBoolPaid).length;
-  const free = rows.length-paid;
-  destroyChart("fee");
-  chartInstances.fee = new Chart($("feeChart"),{
-    type:"doughnut",
-    data:{
-      labels:["유료","무료"],
-      datasets:[{data:[paid,free]}]
-    },
-    options:{responsive:true,plugins:{legend:{position:"bottom"}}}
-  });
-
-  if(typeData.length){
-    const top = typeData[0];
-    const second = typeData[1];
-    let msg = `'${top[0]}' 유형이 ${top[1]}개로 가장 많습니다.`;
-    if(second) msg += ` 다음은 '${second[0]}' ${second[1]}개입니다.`;
-    msg += ` 특정 유형에 시설이 집중되어 있다면 이용자의 선택 폭이 제한될 수 있으므로, 유형별 공급 편차를 함께 확인하는 것이 좋습니다.`;
-    $("typeInsight").textContent = msg;
+async function handleFiles(files){
+  for(const file of files.slice(0,5)){
+    try{
+      const text=await extractText(file);
+      state.attachments.push({name:file.name,text:text.slice(0,16000)});
+    }catch(err){state.attachments.push({name:file.name,text:`[추출 실패: ${err.message}]`});}
   }
+  renderFiles();
+}
+function renderFiles(){ $('#fileList').innerHTML=state.attachments.map((f,i)=>`<div class="file-chip"><span>${escapeHtml(f.name)}</span><button type="button" data-rm="${i}" class="ghost">삭제</button></div>`).join(''); document.querySelectorAll('[data-rm]').forEach(b=>b.onclick=()=>{state.attachments.splice(+b.dataset.rm,1);renderFiles()}); }
+async function extractText(file){
+  const ext=file.name.split('.').pop().toLowerCase();
+  if(['txt','md'].includes(ext)) return await file.text();
+  if(ext==='docx'){ const ab=await file.arrayBuffer(); const r=await mammoth.extractRawText({arrayBuffer:ab}); return r.value; }
+  if(ext==='pdf'){
+    const pdfjsLib=await import('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.8.69/pdf.min.mjs');
+    pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.8.69/pdf.worker.min.mjs';
+    const pdf=await pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise; let out='';
+    for(let i=1;i<=Math.min(pdf.numPages,20);i++){const page=await pdf.getPage(i);const c=await page.getTextContent();out+=`\n[${i}쪽]\n`+c.items.map(x=>x.str).join(' ');}
+    return out;
+  }
+  throw new Error('지원하지 않는 파일 형식');
 }
 
-function enrichRows(){
-  rows = rows.map(r=>{
-    const fee = parseSimpleFee(r["사용료"]);
-    const baseHours = cleanNumber(r["사용기준시간"]);
-    const cap = cleanNumber(r["수용가능인원수"]);
-    const area = cleanNumber(r["면적"]);
-    return {
-      ...r,
-      _fee:fee,
-      _capacity:cap,
-      _area:area,
-      _hourlyFee: (fee !== null && baseHours > 0) ? fee/baseHours : null,
-      _perPersonFee: (fee !== null && cap > 0) ? fee/cap : null,
-      _areaPerPerson: cap > 0 ? area/cap : null
-    };
-  });
-}
-
-function renderCostCharts(){
-  const capTop = [...rows].filter(r=>r._capacity>0).sort((a,b)=>b._capacity-a._capacity).slice(0,10);
-  destroyChart("capacity");
-  chartInstances.capacity = new Chart($("capacityChart"),{
-    type:"bar",
-    data:{
-      labels:capTop.map(facilityName),
-      datasets:[{label:"수용가능인원",data:capTop.map(r=>r._capacity)}]
-    },
-    options:{
-      indexAxis:"y",
-      responsive:true,
-      plugins:{legend:{display:false}},
-      scales:{x:{beginAtZero:true}}
-    }
-  });
-
-  const hourlyTop = [...rows].filter(r=>r._hourlyFee>0).sort((a,b)=>b._hourlyFee-a._hourlyFee).slice(0,10);
-  destroyChart("hourly");
-  chartInstances.hourly = new Chart($("hourlyFeeChart"),{
-    type:"bar",
-    data:{
-      labels:hourlyTop.map(facilityName),
-      datasets:[{label:"시간당 사용료",data:hourlyTop.map(r=>Math.round(r._hourlyFee))}]
-    },
-    options:{
-      indexAxis:"y",
-      responsive:true,
-      plugins:{legend:{display:false}},
-      scales:{x:{beginAtZero:true}}
-    }
-  });
-
-  const scatterRows = rows.filter(r=>r._capacity>0 && r._hourlyFee !== null);
-  destroyChart("scatter");
-  chartInstances.scatter = new Chart($("scatterChart"),{
-    type:"scatter",
-    data:{
-      datasets:[{
-        label:"시설",
-        data:scatterRows.map(r=>({
-          x:r._capacity,
-          y:r._hourlyFee,
-          name:facilityName(r)
-        }))
-      }]
-    },
-    options:{
-      responsive:true,
-      plugins:{
-        tooltip:{
-          callbacks:{
-            label:(ctx)=>{
-              const d=ctx.raw;
-              return `${d.name}: ${formatNum(d.x)}명 / ${formatNum(d.y)}원·시간`;
-            }
-          }
-        }
-      },
-      scales:{
-        x:{title:{display:true,text:"수용가능인원(명)"},beginAtZero:true},
-        y:{title:{display:true,text:"시간당 사용료(원)"},beginAtZero:true}
-      }
-    }
-  });
-
-  const maxCap = capTop[0];
-  const lowHourly = [...rows].filter(r=>r._hourlyFee>0).sort((a,b)=>a._hourlyFee-b._hourlyFee)[0];
-  let msg = "";
-  if(maxCap) msg += `수용인원이 가장 큰 시설은 '${facilityName(maxCap)}'으로 ${formatNum(maxCap._capacity)}명입니다. `;
-  if(lowHourly) msg += `시간당 사용료가 가장 낮은 유료 시설은 '${facilityName(lowHourly)}'으로 약 ${formatNum(lowHourly._hourlyFee)}원/시간입니다. `;
-  msg += `산점도에서는 오른쪽 아래에 위치한 시설이 대체로 '많은 인원을 상대적으로 낮은 시간당 비용으로 수용하는 시설'에 해당합니다.`;
-  $("costInsight").textContent = msg;
-}
-
-function renderRankLists(){
-  const valueRows = [...rows]
-    .filter(r=>r._perPersonFee !== null && r._perPersonFee >= 0 && r._capacity>0)
-    .sort((a,b)=>a._perPersonFee-b._perPersonFee)
-    .slice(0,10);
-
-  const spaceRows = [...rows]
-    .filter(r=>r._areaPerPerson !== null && r._areaPerPerson>0)
-    .sort((a,b)=>b._areaPerPerson-a._areaPerPerson)
-    .slice(0,10);
-
-  $("bestValueList").innerHTML = valueRows.length ? valueRows.map((r,i)=>`
-    <div class="rank-item">
-      <div class="rank-no">${i+1}</div>
-      <div class="rank-name" title="${facilityName(r)}">${facilityName(r)}</div>
-      <div class="rank-value">${formatNum(r._perPersonFee)}원/인</div>
-    </div>
-  `).join("") : `<div class="empty">계산 가능한 데이터가 없습니다.</div>`;
-
-  $("spaceList").innerHTML = spaceRows.length ? spaceRows.map((r,i)=>`
-    <div class="rank-item">
-      <div class="rank-no">${i+1}</div>
-      <div class="rank-name" title="${facilityName(r)}">${facilityName(r)}</div>
-      <div class="rank-value">${formatNum(r._areaPerPerson,2)}㎡/인</div>
-    </div>
-  `).join("") : `<div class="empty">계산 가능한 데이터가 없습니다.</div>`;
-}
-
-function buildTypeFilter(){
-  const vals = [...new Set(rows.map(r=>String(r["개방시설유형구분"] ?? "").trim()).filter(Boolean))].sort();
-  $("typeFilter").innerHTML = `<option value="">전체 시설유형</option>` +
-    vals.map(v=>`<option value="${v}">${v}</option>`).join("");
-}
-
-function renderTable(){
-  const q = $("searchInput").value.trim().toLowerCase();
-  const t = $("typeFilter").value;
-  const filtered = rows.filter(r=>{
-    const text = [
-      facilityName(r),
-      r["개방장소명"],
-      r["개방시설유형구분"],
-      r["소재지도로명주소"],
-      r["소재지지번주소"],
-      r["관리기관명"]
-    ].join(" ").toLowerCase();
-    const typeOk = !t || String(r["개방시설유형구분"] ?? "").trim() === t;
-    return typeOk && (!q || text.includes(q));
-  });
-
-  $("facilityTableBody").innerHTML = filtered.length ? filtered.map(r=>`
-    <tr>
-      <td>${facilityName(r)}</td>
-      <td>${r["개방장소명"] ?? ""}</td>
-      <td>${r["개방시설유형구분"] ?? ""}</td>
-      <td>${r._capacity ? formatNum(r._capacity) : "-"}</td>
-      <td>${r._area ? formatNum(r._area,1) : "-"}</td>
-      <td>${String(r["사용료"] ?? "").trim() || "미입력"}</td>
-      <td>${r._hourlyFee !== null ? formatNum(r._hourlyFee) + "원" : "-"}</td>
-      <td>${r["신청방법구분"] ?? ""}</td>
-      <td>${r["소재지도로명주소"] ?? r["소재지지번주소"] ?? ""}</td>
-    </tr>
-  `).join("") : `<tr><td colspan="9" class="empty">조건에 맞는 시설이 없습니다.</td></tr>`;
-}
-
-function renderAll(){
-  enrichRows();
-  renderKpis();
-  renderTypeCharts();
-  renderCostCharts();
-  renderRankLists();
-  buildTypeFilter();
-  renderTable();
-}
-
-$("csvFile").addEventListener("change",(e)=>{
-  const file = e.target.files[0];
-  if(!file) return;
-  $("fileName").textContent = file.name;
-
-  const reader = new FileReader();
-  reader.onload = () => {
-    try {
-      const buffer = reader.result;
-      let text = "";
-
-      const utf8Text = new TextDecoder("utf-8", { fatal: false }).decode(buffer);
-      const replacementCount = (utf8Text.match(/\uFFFD/g) || []).length;
-      if (replacementCount > 0) {
-        text = new TextDecoder("euc-kr", { fatal: false }).decode(buffer);
-      } else {
-        text = utf8Text;
-      }
-
-      Papa.parse(text,{
-        header:true,
-        skipEmptyLines:true,
-        complete:(result)=>{
-          rows = result.data
-            .map(r => {
-              const cleaned = {};
-              Object.entries(r).forEach(([k,v]) => {
-                const key = String(k ?? "")
-                  .replace(/^\uFEFF/, "")
-                  .replace(/\s+/g, "")
-                  .trim();
-                cleaned[key] = v;
-              });
-              return cleaned;
-            })
-            .filter(r=>Object.values(r).some(v=>String(v??"").trim()!==""));
-
-          if (rows.length && !("유료사용여부" in rows[0])) {
-            console.log("읽힌 열 이름:", Object.keys(rows[0]));
-            alert("'유료사용여부' 열을 찾지 못했습니다. CSV 인코딩 또는 열 이름을 확인해 주세요.");
-          }
-
-          renderAll();
-          document.querySelector(".container").scrollIntoView({behavior:"smooth",block:"start"});
-        },
-        error:(err)=>{
-          alert("CSV 내용을 분석하는 중 오류가 발생했습니다: " + err.message);
-        }
-      });
-    } catch (err) {
-      alert("CSV 파일의 문자 인코딩을 읽는 중 오류가 발생했습니다: " + err.message);
-    }
-  };
-  reader.onerror = () => alert("CSV 파일을 읽을 수 없습니다.");
-  reader.readAsArrayBuffer(file);
+$('#draftForm').addEventListener('submit', async e=>{
+  e.preventDefault();
+  const key=sessionStorage.getItem('gemini_api_key');
+  if(!key){ $('#apiDialog').showModal(); return; }
+  const btn=$('#generate'); btn.disabled=true; btn.innerHTML='초안을 작성하는 중…'; $('#resultBadge').textContent='생성 중';
+  try{
+    const prompt=buildPrompt();
+    const doc=await callGemini(key,$('#model').value.trim()||'gemini-3.6-flash',prompt);
+    state.doc=normalizeDoc(doc); renderDoc(state.doc);
+  }catch(err){ alert('생성 실패: '+err.message); $('#resultBadge').textContent='오류'; }
+  finally{btn.disabled=false;btn.innerHTML='<span>✦</span> AI 한글문서 초안 생성';}
 });
 
-$("searchInput").addEventListener("input",renderTable);
-$("typeFilter").addEventListener("change",renderTable);
+function buildPrompt(){
+  const refs=state.attachments.map(a=>`\n--- 참고파일: ${a.name} ---\n${a.text}`).join('\n');
+  const tone=$('#tone').value==='formal'?'문장 종결은 공공기관 보고체(~함/~임/~됨)를 주로 사용':'정중한 서술체를 사용';
+  return `당신은 대한민국 공공기관의 행정문서 작성 전문가다. 사용자가 제공한 사실을 임의로 만들거나 수치를 창작하지 말고, 정보가 없으면 추정하지 않는다.\n\n[문서 디자인/내용 시스템]\n- 제목은 간결하고 구체적으로 작성한다.\n- 보고형 문서는 문서 앞부분에 요약을 둔다.\n- 본문은 주어와 서술어가 드러나는 서술식 문장을 사용한다. ${tone}.\n- 항목 계층은 필요한 경우 □ → ○ → - → · 순서를 지키고 반드시 실제 유니코드 문자를 전제로 한다.\n- 표 없이도 의미가 이해되도록 일정·절차·체계는 먼저 문장으로 설명한다.\n- 과도한 장식, 박스 제목, 의미 없는 축약은 피한다.\n- ${TYPE_GUIDES[state.type]}\n\n[사용자 입력]\n제목/주제: ${$('#title').value.trim()}\n핵심내용: ${$('#core').value.trim()}\n발행기관: ${$('#org').value.trim()||'미입력'}\n담당/보고정보: ${$('#owner').value.trim()||'미입력'}\n추가지시: ${$('#extra').value.trim()||'없음'}\n${refs}\n\n반드시 아래 JSON 객체 하나만 반환한다. 마크다운 코드블록은 쓰지 않는다.\n{\n  "title":"문서 제목",\n  "meta":"보고방식/날짜/기관 또는 담당정보. 정보가 없으면 빈 문자열",\n  "summary":"전체를 2~4문장으로 요약",\n  "sections":[\n    {"heading":"1. 추진배경", "blocks":[\n      {"level":"bullet","text":"내용"},\n      {"level":"dash","text":"내용"}\n    ]}\n  ],\n  "review":["원문에서 확인이 필요한 사항 또는 빈 배열"]\n}\nlevel은 box, bullet, dash, dot, body 중 하나만 사용한다. heading은 필요 없으면 빈 문자열로 둘 수 있다.`;
+}
+
+async function callGemini(key,model,prompt){
+  const r=await fetch('https://generativelanguage.googleapis.com/v1beta/interactions',{
+    method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},
+    body:JSON.stringify({model,input:prompt,store:false})
+  });
+  const data=await r.json(); if(!r.ok) throw new Error(data?.error?.message||`HTTP ${r.status}`);
+  let text=data.output_text || data?.steps?.at?.(-1)?.content?.find?.(x=>x.type==='text')?.text || '';
+  if(!text){
+    const pieces=[]; for(const step of (data.steps||[])) for(const c of (step.content||[])) if(c.text) pieces.push(c.text); text=pieces.join('\n');
+  }
+  text=text.trim().replace(/^```json\s*/,'').replace(/```$/,'').trim();
+  try{return JSON.parse(text)}catch{throw new Error('Gemini 응답을 JSON으로 해석하지 못했습니다. 모델 응답: '+text.slice(0,180));}
+}
+
+function normalizeDoc(d){
+  return {title:d.title||$('#title').value,meta:d.meta||'',summary:d.summary||'',sections:Array.isArray(d.sections)?d.sections:[],review:Array.isArray(d.review)?d.review:[]};
+}
+function renderDoc(d){
+  $('#empty').hidden=true; $('#resultWrap').hidden=false; $('#resultBadge').textContent='완료'; $('#resultBadge').className='status-dot';
+  let html=`<h1>${escapeHtml(d.title)}</h1>${d.meta?`<div class="meta">${escapeHtml(d.meta)}</div>`:''}<div class="summary-title">요약</div><p class="summary">${escapeHtml(d.summary)}</p>`;
+  for(const s of d.sections){ if(s.heading) html+=`<h2>${escapeHtml(s.heading)}</h2>`; for(const b of (s.blocks||[])){const lv=['box','bullet','dash','dot','body'].includes(b.level)?b.level:'body'; html+=`<p class="block level-${lv}">${escapeHtml(MARK[lv]||'')}${escapeHtml(b.text||'')}</p>`;} }
+  $('#paper').innerHTML=html;
+  const checks=[]; checks.push('✓ 요약 우선 배치'); checks.push('✓ 유니코드 항목기호 사용'); checks.push('✓ HWPX 템플릿 기반 저장'); if(d.review.length) checks.push('확인 필요: '+d.review.join(' / '));
+  $('#quality').textContent=checks.join('  ·  ');
+}
+function toPlainText(d){ let x=`${d.title}\n${d.meta?d.meta+'\n':''}\n요약\n${d.summary}\n`; for(const s of d.sections){x+=`\n${s.heading||''}\n`;for(const b of (s.blocks||[]))x+=(MARK[b.level]||'')+(b.text||'')+'\n';} if(d.review.length)x+='\n[확인 필요]\n- '+d.review.join('\n- '); return x.trim(); }
+$('#copyText').onclick=async()=>{await navigator.clipboard.writeText(toPlainText(state.doc));$('#copyText').textContent='복사됨';setTimeout(()=>$('#copyText').textContent='텍스트 복사',1000)};
+$('#downloadTxt').onclick=()=>downloadBlob(new Blob([toPlainText(state.doc)],{type:'text/plain;charset=utf-8'}),safeName(state.doc.title)+'.txt');
+$('#downloadHwpx').onclick=async()=>{ try{const blob=await buildHwpx(state.doc);downloadBlob(blob,safeName(state.doc.title)+'.hwpx');}catch(e){alert('HWPX 생성 실패: '+e.message)} };
+
+async function buildHwpx(d){
+  if(!window.JSZip) throw new Error('JSZip 로딩 실패');
+  const chunkPaths=['assets/base.0.txt','assets/base.1.txt','assets/base.2.txt','assets/base.3.txt','assets/base.4.txt','assets/base.5.txt'];
+  const parts=await Promise.all(chunkPaths.map(async path=>{const r=await fetch(path);if(!r.ok)throw new Error('HWPX 템플릿 조각을 불러오지 못했습니다: '+path);return (await r.text()).trim();}));
+  const b64=parts.join('');
+  const raw=atob(b64);
+  const bytes=new Uint8Array(raw.length);
+  for(let i=0;i<raw.length;i++) bytes[i]=raw.charCodeAt(i);
+  const zip=await JSZip.loadAsync(bytes.buffer);
+  const secFile=zip.file('Contents/section0.xml'); if(!secFile) throw new Error('템플릿 section0.xml 없음');
+  const xml=await secFile.async('string');
+  const idx=xml.indexOf('<hp:p'); if(idx<0) throw new Error('템플릿 문단 구조를 찾지 못함');
+  const head=xml.slice(0,idx); const m=xml.match(/<hp:secPr\b[\s\S]*?<\/hp:secPr>/); const secpr=m?m[0]:'';
+  let pid=1000; const paras=[];
+  paras.push(makeP('title',d.title,pid++,secpr));
+  if(d.meta) paras.push(makeP('body',d.meta,pid++));
+  paras.push(makeP('summary','요약',pid++)); paras.push(makeP('body',d.summary,pid++));
+  for(const s of d.sections){ if(s.heading) paras.push(makeP('hnum',s.heading,pid++)); for(const b of (s.blocks||[])){const kind=STYLE[b.level]?b.level:'body';paras.push(makeP(kind,b.text||'',pid++));} }
+  if(d.review.length){paras.push(makeP('hnum','[확인 필요]',pid++));d.review.forEach(t=>paras.push(makeP('dash',t,pid++)));}
+  const newSection=head+paras.join('')+'</hs:sec>';
+  const outZip=new JSZip();
+  const mime=zip.file('mimetype');
+  if(!mime) throw new Error('템플릿 mimetype 없음');
+  outZip.file('mimetype',await mime.async('string'),{compression:'STORE'});
+  const names=Object.keys(zip.files).filter(n=>n!=='mimetype').sort((a,b)=>a.localeCompare(b));
+  for(const name of names){
+    const entry=zip.files[name];
+    if(entry.dir){ outZip.folder(name); continue; }
+    const data=name==='Contents/section0.xml'?newSection:await entry.async('uint8array');
+    outZip.file(name,data,{binary:name!=='Contents/section0.xml'});
+  }
+  return await outZip.generateAsync({type:'blob',mimeType:'application/hwp+zip',compression:'DEFLATE',compressionOptions:{level:6}});
+}
+function makeP(kind,text,pid,secpr=''){
+  const [para,char]=STYLE[kind]; const body=xmlEsc((MARK[kind]||'')+text);
+  if(kind==='title') return `<hp:p id="${pid}" paraPrIDRef="${para}" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="${char}">${secpr}</hp:run><hp:run charPrIDRef="${char}"><hp:t>${body}</hp:t></hp:run></hp:p>`;
+  return `<hp:p id="${pid}" paraPrIDRef="${para}" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="${char}"><hp:t>${body}</hp:t></hp:run></hp:p>`;
+}
+function xmlEsc(s){return String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')}
+function escapeHtml(s){return String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
+function safeName(s){return (s||'한글문서_초안').replace(/[\\/:*?"<>|]/g,'_').slice(0,80)}
+function downloadBlob(blob,name){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},500)}

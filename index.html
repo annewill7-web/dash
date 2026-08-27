@@ -1,212 +1,129 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>교육시설 개방 현황 대시보드</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>한글문서 초안기</title>
+  <meta name="description" content="Gemini API로 행정문서 초안을 만들고 HWPX로 저장하는 웹앱" />
   <link rel="stylesheet" href="styles.css" />
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.8.69/pdf.min.mjs" type="module"></script>
 </head>
 <body>
-  <header class="hero">
-    <div class="hero-inner">
-      <div>
-        <p class="eyebrow">PUBLIC FACILITY DASHBOARD</p>
-        <h1>교육시설 개방 현황 대시보드</h1>
-        <p class="hero-desc">
-          CSV 파일을 업로드하면 시설 현황, 비용, 규모, 운영정보를 자동으로 분석합니다.
-          아래로 스크롤하면 전체 현황 → 해석 → 유형별 분석 → 비용 분석 → 상세표 순서로 확인할 수 있습니다.
-        </p>
-      </div>
-      <div class="upload-card">
-        <label for="csvFile" class="upload-label">CSV 파일 선택</label>
-        <input type="file" id="csvFile" accept=".csv,text/csv" />
-        <p id="fileName">아직 파일을 선택하지 않았습니다.</p>
-      </div>
-    </div>
+  <header class="topbar">
+    <a class="brand" href="#">
+      <span class="brand-mark">한글</span>
+      <span><strong>한글문서 초안기</strong><small>AI 행정문서 · HWPX</small></span>
+    </a>
+    <button id="apiButton" class="ghost">Gemini API 설정</button>
   </header>
 
-  <main class="container">
-    <section class="section">
-      <div class="section-head">
-        <span class="section-no">01</span>
-        <div>
-          <h2>전체 현황</h2>
-          <p>업로드한 데이터의 핵심 규모와 운영 특성을 한눈에 확인합니다.</p>
-        </div>
+  <main class="shell">
+    <section class="hero">
+      <div>
+        <span class="eyebrow">행정안전부 AI 친화 문서 규칙 + 예시 HWPX 3종 종합</span>
+        <h1>자료만 넣으면,<br><em>한글 문서 초안</em>을 만듭니다.</h1>
+        <p>내용은 Gemini가 구조화하고, 결과는 공공기관 문서 계층과 서식을 적용해 미리보기·텍스트·HWPX로 저장합니다.</p>
       </div>
-
-      <div class="kpi-grid">
-        <article class="kpi-card">
-          <span>전체 시설 수</span>
-          <strong id="kpiTotal">-</strong>
-          <small>개</small>
-        </article>
-        <article class="kpi-card">
-          <span>유료 시설 수</span>
-          <strong id="kpiPaid">-</strong>
-          <small>개</small>
-        </article>
-        <article class="kpi-card">
-          <span>무료 시설 수</span>
-          <strong id="kpiFree">-</strong>
-          <small>개</small>
-        </article>
-        <article class="kpi-card">
-          <span>평균 사용료</span>
-          <strong id="kpiFee">-</strong>
-          <small>원</small>
-        </article>
-        <article class="kpi-card">
-          <span>평균 수용인원</span>
-          <strong id="kpiCapacity">-</strong>
-          <small>명</small>
-        </article>
-        <article class="kpi-card">
-          <span>평균 면적</span>
-          <strong id="kpiArea">-</strong>
-          <small>㎡</small>
-        </article>
-      </div>
-
-      <div class="insight-box">
-        <div class="insight-title">
-          <span>자동 해석</span>
-          <strong>이 데이터에서 무엇을 읽을 수 있나요?</strong>
-        </div>
-        <div id="overviewInsight" class="insight-text">
-          CSV 파일을 업로드하면 전체 시설 현황을 자동으로 해석해 표시합니다.
-        </div>
+      <div class="rule-card">
+        <b>기본 작성 규칙</b>
+        <span>요약 우선 · 주어/서술어 명확</span>
+        <span>□ → ○ → - → · 유니코드 계층</span>
+        <span>제목 20pt · 본문 15pt · 함초롬바탕</span>
       </div>
     </section>
 
-    <section class="section">
-      <div class="section-head">
-        <span class="section-no">02</span>
-        <div>
-          <h2>시설 유형과 운영 현황</h2>
-          <p>어떤 유형의 시설이 많이 개방되어 있는지, 유료·무료 구성은 어떤지 확인합니다.</p>
-        </div>
-      </div>
+    <section class="workspace">
+      <form id="draftForm" class="panel input-panel">
+        <div class="panel-head"><div><small>STEP 1</small><h2>초안 재료 입력</h2></div><span class="status-dot">입력</span></div>
 
-      <div class="chart-grid">
-        <div class="panel">
-          <h3>시설유형별 시설 수</h3>
-          <canvas id="typeChart"></canvas>
+        <label>문서 유형</label>
+        <div class="type-grid" id="typeGrid">
+          <button type="button" class="type-card active" data-type="report"><b>보고서 · 계획안</b><span>요약 → 추진배경 → 주요내용 → 향후계획</span></button>
+          <button type="button" class="type-card" data-type="education"><b>교육 · 행사 계획</b><span>추진배경 → 개요 → 세부계획 → 행정사항</span></button>
+          <button type="button" class="type-card" data-type="brief"><b>간결 보고</b><span>핵심을 짧고 빠르게 정리</span></button>
         </div>
-        <div class="panel">
-          <h3>유료 / 무료 비율</h3>
-          <canvas id="feeChart"></canvas>
-        </div>
-      </div>
 
-      <div class="insight-box compact">
-        <div id="typeInsight" class="insight-text">
-          시설유형별 분석 결과가 여기에 표시됩니다.
+        <div class="api-inline-card">
+          <div class="api-inline-head">
+            <div>
+              <small>먼저 설정</small>
+              <h3>Gemini API 키</h3>
+            </div>
+            <span id="apiStatus" class="api-status">미설정</span>
+          </div>
+          <p>Google AI Studio에서 발급받은 Gemini API 키를 입력하세요. 키는 이 브라우저 탭의 세션에만 저장됩니다.</p>
+          <div class="api-inline-row">
+            <input id="apiKeyInline" type="password" autocomplete="off" placeholder="AIza..." />
+            <button id="saveApiInline" type="button" class="primary small">API 키 저장</button>
+          </div>
+          <div class="api-inline-actions">
+            <button id="toggleApiKey" type="button" class="text-button">키 보기</button>
+            <button id="clearApiKey" type="button" class="text-button danger">키 삭제</button>
+          </div>
         </div>
-      </div>
-    </section>
 
-    <section class="section">
-      <div class="section-head">
-        <span class="section-no">03</span>
-        <div>
-          <h2>비용과 규모 분석</h2>
-          <p>수용인원, 면적, 시간당 사용료를 비교해 시설의 규모와 가격 특성을 확인합니다.</p>
+        <label for="title">문서 제목 / 주제 <i>*</i></label>
+        <input id="title" required placeholder="예) 2026년 생성형 AI 활용 연수 운영 계획(안)" />
+
+        <label for="core">핵심 내용 <i>*</i><span id="counter">0 / 6000</span></label>
+        <textarea id="core" required maxlength="6000" rows="10" placeholder="누가, 언제, 무엇을, 왜 하는지 / 배경 / 수치 / 일정 / 예산 / 대상 / 기대효과 등을 자유롭게 적어주세요."></textarea>
+
+        <label>참고 파일 <span class="muted">선택 · TXT/MD/PDF/DOCX</span></label>
+        <label class="dropzone" id="dropzone">
+          <input id="files" type="file" multiple accept=".txt,.md,.pdf,.docx" hidden />
+          <strong>파일을 끌어놓거나 클릭해 첨부</strong>
+          <span>브라우저에서 텍스트만 추출하며 외부 저장하지 않습니다.</span>
+        </label>
+        <div id="fileList" class="file-list"></div>
+
+        <div class="two-col">
+          <div><label for="org">발행 기관</label><input id="org" placeholder="예) 서울특별시교육청교육연수원" /></div>
+          <div><label for="owner">담당자 / 보고정보</label><input id="owner" placeholder="예) 교육행정연수부 / 담당자 홍길동" /></div>
         </div>
-      </div>
 
-      <div class="chart-grid">
-        <div class="panel">
-          <h3>수용인원 상위 시설</h3>
-          <canvas id="capacityChart"></canvas>
+        <details class="advanced">
+          <summary>세부 설정</summary>
+          <div class="two-col">
+            <div><label for="model">Gemini 모델</label><input id="model" value="gemini-3.6-flash" /></div>
+            <div><label for="tone">문체</label><select id="tone"><option value="formal">공공기관 보고체(~함/~임)</option><option value="polite">정중한 서술체</option></select></div>
+          </div>
+          <label for="extra">추가 지시</label>
+          <textarea id="extra" rows="3" placeholder="예) 일정표가 필요하면 표 대신 항목식으로 먼저 설명"></textarea>
+        </details>
+
+        <button class="primary" id="generate" type="submit"><span>✦</span> AI 한글문서 초안 생성</button>
+        <p class="security">API 키는 코드에 저장하지 않고 현재 브라우저 세션에만 보관합니다.</p>
+      </form>
+
+      <section class="panel output-panel">
+        <div class="panel-head"><div><small>STEP 2</small><h2>생성 결과</h2></div><span id="resultBadge" class="status-dot neutral">대기</span></div>
+        <div id="empty" class="empty-state"><div class="doc-icon">文</div><h3>왼쪽에서 내용을 입력해 주세요.</h3><p>생성된 문서는 여기에서 A4 형태로 미리볼 수 있습니다.</p></div>
+        <div id="resultWrap" hidden>
+          <div class="result-actions">
+            <button class="ghost" id="copyText">텍스트 복사</button>
+            <button class="ghost" id="downloadTxt">TXT 저장</button>
+            <button class="primary small" id="downloadHwpx">HWPX 저장</button>
+          </div>
+          <article id="paper" class="paper"></article>
+          <div id="quality" class="quality"></div>
         </div>
-        <div class="panel">
-          <h3>시간당 사용료 상위 시설</h3>
-          <canvas id="hourlyFeeChart"></canvas>
-        </div>
-      </div>
-
-      <div class="panel full">
-        <h3>수용인원 × 시간당 사용료</h3>
-        <p class="panel-desc">오른쪽으로 갈수록 수용인원이 크고, 위로 갈수록 시간당 비용이 높습니다.</p>
-        <canvas id="scatterChart"></canvas>
-      </div>
-
-      <div class="insight-box compact">
-        <div id="costInsight" class="insight-text">
-          비용 및 규모 분석 결과가 여기에 표시됩니다.
-        </div>
-      </div>
-    </section>
-
-    <section class="section">
-      <div class="section-head">
-        <span class="section-no">04</span>
-        <div>
-          <h2>추천용 파생지표</h2>
-          <p>시간당 사용료, 1인당 사용료, 1인당 면적을 계산해 비교합니다.</p>
-        </div>
-      </div>
-
-      <div class="metric-grid">
-        <div class="panel">
-          <h3>1인당 사용료가 낮은 시설 TOP 10</h3>
-          <div id="bestValueList" class="rank-list"></div>
-        </div>
-        <div class="panel">
-          <h3>1인당 면적이 넓은 시설 TOP 10</h3>
-          <div id="spaceList" class="rank-list"></div>
-        </div>
-      </div>
-    </section>
-
-    <section class="section">
-      <div class="section-head">
-        <span class="section-no">05</span>
-        <div>
-          <h2>시설 상세 조회</h2>
-          <p>검색어를 입력하면 시설명, 장소명, 주소, 유형을 기준으로 빠르게 찾을 수 있습니다.</p>
-        </div>
-      </div>
-
-      <div class="toolbar">
-        <input id="searchInput" type="search" placeholder="시설명, 지역, 유형 검색" />
-        <select id="typeFilter">
-          <option value="">전체 시설유형</option>
-        </select>
-      </div>
-
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>시설명</th>
-              <th>장소명</th>
-              <th>유형</th>
-              <th>수용인원</th>
-              <th>면적(㎡)</th>
-              <th>사용료</th>
-              <th>시간당 사용료</th>
-              <th>신청방법</th>
-              <th>주소</th>
-            </tr>
-          </thead>
-          <tbody id="facilityTableBody">
-            <tr>
-              <td colspan="9" class="empty">CSV 파일을 업로드하면 시설 목록이 표시됩니다.</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+      </section>
     </section>
   </main>
 
-  <footer>
-    <p>교육시설 개방 현황 대시보드 · HTML / CSS / JavaScript</p>
-  </footer>
+  <dialog id="apiDialog">
+    <form method="dialog" class="dialog-card">
+      <h3>Gemini API 설정</h3>
+      <p>정적 HTML 버전이라 API 키를 서버에 숨길 수 없습니다. 테스트용으로만 사용하고, 실제 배포 시에는 서버리스 프록시로 옮기는 것을 권장합니다.</p>
+      <label for="apiKey">Gemini API Key</label>
+      <input id="apiKey" type="password" autocomplete="off" placeholder="AIza..." />
+      <div class="dialog-actions"><button value="cancel" class="ghost">취소</button><button id="saveApi" value="default" class="primary small">저장</button></div>
+    </form>
+  </dialog>
 
+  <footer>AI 친화적 행정문서 작성 원칙을 참고한 프로토타입 · 생성 결과는 담당자가 최종 검토하세요.</footer>
   <script src="app.js"></script>
 </body>
 </html>
